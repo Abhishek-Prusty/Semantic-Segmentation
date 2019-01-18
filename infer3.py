@@ -42,6 +42,10 @@ im1=img
 VGG_Weights_path = "vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5"
 
 def FCN8( nClasses ,  input_height=224, input_width=224):
+    ## input_height and width must be devisible by 32 because maxpooling with filter size = (2,2) is operated 5 times,
+    ## which makes the input_height and width 2^5 = 32 times smaller
+    #assert input_height%32 == 0
+    #assert input_width%32 == 0
     IMAGE_ORDERING =  "channels_last" 
 
     img_input = Input(shape=(input_height,input_width, 3)) ## Assume 224,224,3
@@ -76,6 +80,20 @@ def FCN8( nClasses ,  input_height=224, input_width=224):
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv2', data_format=IMAGE_ORDERING )(x)
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv3', data_format=IMAGE_ORDERING )(x)
     pool5 = MaxPooling2D((2, 2), strides=(2, 2), name='block5_pool', data_format=IMAGE_ORDERING )(x)## (None, 7, 7, 512)
+
+    #x = Flatten(name='flatten')(x)
+    #x = Dense(4096, activation='relu', name='fc1')(x)
+    # <--> o = ( Conv2D( 4096 , ( 7 , 7 ) , activation='relu' , padding='same', data_format=IMAGE_ORDERING))(o)
+    # assuming that the input_height = input_width = 224 as in VGG data
+    
+    #x = Dense(4096, activation='relu', name='fc2')(x)
+    # <--> o = ( Conv2D( 4096 , ( 1 , 1 ) , activation='relu' , padding='same', data_format=IMAGE_ORDERING))(o)   
+    # assuming that the input_height = input_width = 224 as in VGG data
+    
+    #x = Dense(1000 , activation='softmax', name='predictions')(x)
+    # <--> o = ( Conv2D( nClasses ,  ( 1 , 1 ) ,kernel_initializer='he_normal' , data_format=IMAGE_ORDERING))(o)
+    # assuming that the input_height = input_width = 224 as in VGG data
+    
     
     vgg  = Model(  img_input , pool5  )
     vgg.load_weights(VGG_Weights_path) ## loading VGG weights for the encoder parts of FCN8
@@ -97,14 +115,12 @@ def FCN8( nClasses ,  input_height=224, input_width=224):
     o = Add(name="add")([pool411_2, pool311, conv7_4 ])
     # o = Conv2DTranspose( nClasses , kernel_size=(8,8) ,  strides=(8,8) , use_bias=False, data_format=IMAGE_ORDERING )(o)
 
-    cl1= Conv2DTranspose( 9 , kernel_size=(2,2) ,  strides=(2,2) , use_bias=False, data_format=IMAGE_ORDERING )(o)
-    o1 = (Activation('softmax'))(cl1)
+    cl1= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='relu', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(o)
+    cl2= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='relu', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl1)
+    cl3= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='sigmoid', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl2)
 
-    cl2= Conv2DTranspose( 9 , kernel_size=(2,2) ,  strides=(4,4) , use_bias=False, data_format=IMAGE_ORDERING )(o1)
-    o2 = (Activation('softmax'))(cl2)
     
-    
-    model = Model(img_input, o2)
+    model = Model(img_input, cl3)
     return model
 
 
@@ -112,21 +128,28 @@ model = FCN8(nClasses     = n_classes,
              input_height = input_height, 
              input_width  = input_width)
 
-model.load_weights('modelFCN8_bhoomi_multi.h5')
+print(model.summary())
+model.load_weights('modelFCN8_bhoomi_multi-2019-01-19 03:33:02.607612.h5')
+
 
 img=np.expand_dims(img,axis=0)
-output=model.predict(img)
-print(output.shape)
-#outimg=np.argmax(output,axis=3)
-outimg=output[:,:,:,3]
-print(outimg.shape)
+print(img.shape)
+output=model.predict(img,batch_size=1,verbose=1)
 print(output.shape)
 
-outimg=np.reshape(outimg,(input_height,input_width,1))
-print(np.unique(outimg))
-outimg=outimg*255
+output=output[0]
+print(output.shape)	
+output=output[:,:,0]
+output=np.reshape(output,(input_height,input_width,1))
+output[output>=0.5]=1
+output[output<0.5]=0
+print(output.shape)
+output=255*output
+print(output)
+print(output.shape)
+print(np.unique(output))
 
-cv2.imwrite('out3_multi.png',outimg)
+cv2.imwrite('out3_multi.png',output)
 
 def give_color_to_seg_img(im,seg,n_classes):
     '''
@@ -147,5 +170,5 @@ def give_color_to_seg_img(im,seg,n_classes):
     return(seg_img)
 
 
-colout=give_color_to_seg_img(im1,outimg,2)
+colout=give_color_to_seg_img(im1,output,9)
 cv2.imwrite('out_col.png',colout)

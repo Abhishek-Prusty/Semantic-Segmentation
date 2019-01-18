@@ -42,6 +42,10 @@ output_height , output_width = 224 , 768
 VGG_Weights_path = "vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5"
 
 def FCN8( nClasses ,  input_height=224, input_width=224):
+    ## input_height and width must be devisible by 32 because maxpooling with filter size = (2,2) is operated 5 times,
+    ## which makes the input_height and width 2^5 = 32 times smaller
+    #assert input_height%32 == 0
+    #assert input_width%32 == 0
     IMAGE_ORDERING =  "channels_last" 
 
     img_input = Input(shape=(input_height,input_width, 3)) ## Assume 224,224,3
@@ -76,6 +80,20 @@ def FCN8( nClasses ,  input_height=224, input_width=224):
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv2', data_format=IMAGE_ORDERING )(x)
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv3', data_format=IMAGE_ORDERING )(x)
     pool5 = MaxPooling2D((2, 2), strides=(2, 2), name='block5_pool', data_format=IMAGE_ORDERING )(x)## (None, 7, 7, 512)
+
+    #x = Flatten(name='flatten')(x)
+    #x = Dense(4096, activation='relu', name='fc1')(x)
+    # <--> o = ( Conv2D( 4096 , ( 7 , 7 ) , activation='relu' , padding='same', data_format=IMAGE_ORDERING))(o)
+    # assuming that the input_height = input_width = 224 as in VGG data
+    
+    #x = Dense(4096, activation='relu', name='fc2')(x)
+    # <--> o = ( Conv2D( 4096 , ( 1 , 1 ) , activation='relu' , padding='same', data_format=IMAGE_ORDERING))(o)   
+    # assuming that the input_height = input_width = 224 as in VGG data
+    
+    #x = Dense(1000 , activation='softmax', name='predictions')(x)
+    # <--> o = ( Conv2D( nClasses ,  ( 1 , 1 ) ,kernel_initializer='he_normal' , data_format=IMAGE_ORDERING))(o)
+    # assuming that the input_height = input_width = 224 as in VGG data
+    
     
     vgg  = Model(  img_input , pool5  )
     vgg.load_weights(VGG_Weights_path) ## loading VGG weights for the encoder parts of FCN8
@@ -97,14 +115,12 @@ def FCN8( nClasses ,  input_height=224, input_width=224):
     o = Add(name="add")([pool411_2, pool311, conv7_4 ])
     # o = Conv2DTranspose( nClasses , kernel_size=(8,8) ,  strides=(8,8) , use_bias=False, data_format=IMAGE_ORDERING )(o)
 
-    cl1= Conv2DTranspose( 9 , kernel_size=(2,2) ,  strides=(2,2) , use_bias=False, data_format=IMAGE_ORDERING )(o)
-    o1 = (Activation('sigmoid'))(cl1)
+    cl1= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='relu', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(o)
+    cl2= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='relu', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl1)
+    cl3= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='sigmoid', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl2)
 
-    cl2= Conv2DTranspose( 9 , kernel_size=(2,2) ,  strides=(4,4) , use_bias=False, data_format=IMAGE_ORDERING )(o1)
-    o2 = (Activation('sigmoid'))(cl2)
     
-    
-    model = Model(img_input, o2)
+    model = Model(img_input, cl3)
     return model
 
 
@@ -117,10 +133,6 @@ print(model.summary())
 #plot_model( model, show_shapes=True , to_file='model_densenet.png')
 with open("classweights.pickle", "rb") as f:
     classweights= pickle.load(f)
-
-
-
-
 
 def getImageArr( path , width , height ):
     img = cv2.imread(path, 1)
@@ -144,15 +156,11 @@ def data_gen(source=dir_img, target=dir_seg,bat_size=1):
     images.sort()
     segmentations  = os.listdir(target)
     segmentations.sort()
-
-    batch_size = bat_size
     while True:
-        try:
-            batch = []
-            batch_labels = []            
+        try:           
             img_name=random.choice(images)
             img=cv2.imread(dir_img+img_name,1)
-            img=cv2.resize(img,(input_width,input_height))
+            img=cv2.resize(img,(input_width,input_height)).astype('float32')
             img=img/255.0
             temp=[]
             for i in range(9):
@@ -161,30 +169,85 @@ def data_gen(source=dir_img, target=dir_seg,bat_size=1):
                 seg=cv2.resize(seg,(input_width,input_height))
                 ret,thresh1 = cv2.threshold(seg,127,255,cv2.THRESH_BINARY)
                 thresh1=thresh1/255.0
-                temp.append(thresh1.astype(int))
-            temp=np.array(temp)
+                temp.append(thresh1)
+            temp=np.array(temp).astype(int)
+
+            # temp=np.reshape(temp,(1,input_height,input_width,9))
+            temp=np.moveaxis(temp,0,-1)
             temp=np.reshape(temp,(-1,input_height,input_width,9))
             #print(temp.shape)
             yield np.expand_dims(np.array(img),axis=0), np.reshape(np.array(temp),(-1,input_height,input_width,n_classes))
         except Exception as e:
             print(e)
 
+def focal_loss(gamma=2, alpha=0.75):
+    def focal_loss_fixed(y_true, y_pred):
+        pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+        pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+        return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1))-K.sum((1-alpha) * K.pow( pt_0, gamma) * K.log(1. - pt_0))
+return focal_loss_fixed 
 
-model.compile(loss=['binary_crossentropy'],
-              optimizer=Adam(lr=0.001),
+model.compile(loss=[focal_loss(gamma=2,alpha=0.6)],
+              optimizer=Adam(lr=0.0001),
               metrics=['accuracy'])
 
 # loss_weights=list(classweights)
 img_gen=data_gen()
 val_gen=data_gen(val_img,val_seg,1)
 
+# images = os.listdir(dir_img)
+# images.sort()
+# segmentations  = os.listdir(dir_seg)
+# segmentations.sort()
 
+# img_name=random.choice(images)
+# img=cv2.imread(dir_img+img_name,1)
+# img=cv2.resize(img,(input_width,input_height)).astype('float32')
+# img=img/255.0
+# temp=[]
+# for i in range(9):
+#     seg_name=img_name+'_'+str(i)+'.jpeg'
+#     seg=cv2.imread(dir_seg+seg_name,0)
+#     seg=cv2.resize(seg,(input_width,input_height))
+#     ret,thresh1 = cv2.threshold(seg,127,255,cv2.THRESH_BINARY)
+#     thresh1=thresh1/255.0
+#     temp.append(thresh1)
+# temp=np.array(temp).astype(int)
+
+# # temp=np.reshape(temp,(1,input_height,input_width,9))
+# temp=np.moveaxis(temp,0,-1)
+# temp=np.reshape(temp,(-1,input_height,input_width,9))
+
+# inp=np.expand_dims(np.array(img),axis=0)
+# target=np.reshape(np.array(temp),(-1,input_height,input_width,n_classes))
+# ans=model.predict(inp)
+
+# print(type(ans),type(target))
+# print(ans[0,:,:,2])
+# print(target[0,:,:,2])
+
+# output=ans
+# print(output.shape)
+
+# output=output[0]
+# print(output.shape) 
+# output=output[:,:,2]
+# output=np.reshape(output,(input_height,input_width,1))
+# # output[output>=0.90]=1
+# # output[output<0.90]=0
+# print(output.shape)
+# output=255*output
+# print(output)
+# print(output.shape)
+# print(np.unique(output))
+
+# cv2.imwrite('out3_multitest.png',output)
 
 model.fit_generator(generator=img_gen,
                     validation_data=None,
-                    epochs=100,
-                    steps_per_epoch=246
-                    
+                    epochs=20,
+                    steps_per_epoch=246,
+                    class_weight=list(classweights)
                     )
 
 # hist1 = model.fit(X_train,y_train,
