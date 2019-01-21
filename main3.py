@@ -117,8 +117,7 @@ def FCN8( nClasses ,  input_height=224, input_width=224):
 
     cl1= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='relu', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(o)
     cl2= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='relu', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl1)
-    cl3= Conv2DTranspose( 9 , kernel_size=(4,4) , activation='sigmoid', strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl2)
-
+    cl3= Conv2DTranspose( 9 , kernel_size=(4,4) , strides=(2,2) , padding='same',data_format=IMAGE_ORDERING )(cl2)
     
     model = Model(img_input, cl3)
     return model
@@ -185,9 +184,33 @@ def focal_loss(gamma=2, alpha=0.75):
         pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
         pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
         return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1))-K.sum((1-alpha) * K.pow( pt_0, gamma) * K.log(1. - pt_0))
-return focal_loss_fixed 
+    return focal_loss_fixed 
+def jdl(smooth=100):
+    def jaccard_distance_loss(y_true, y_pred, smooth=100):
+        """
+        Jaccard = (|X & Y|)/ (|X|+ |Y| - |X & Y|)
+                = sum(|A*B|)/(sum(|A|)+sum(|B|)-sum(|A*B|))
+        
+        The jaccard distance loss is usefull for unbalanced datasets. This has been
+        shifted so it converges on 0 and is smoothed to avoid exploding or disapearing
+        gradient.
+        
+        Ref: https://en.wikipedia.org/wiki/Jaccard_index
+        
+        @url: https://gist.github.com/wassname/f1452b748efcbeb4cb9b1d059dce6f96
+        @author: wassname
+        """
+        intersection = K.sum(K.abs(y_true * y_pred), axis=-1)
+        sum_ = K.sum(K.abs(y_true) + K.abs(y_pred), axis=-1)
+        jac = (intersection + smooth) / (sum_ - intersection + smooth)
+        return (1 - jac) * smooth
+    return jaccard_distance_loss
+def bcewl():
+    def bce_with_logits(l,t):
+        return tf.nn.sigmoid_cross_entropy_with_logits(labels=l,logits=t)
+    return bce_with_logits
 
-model.compile(loss=[focal_loss(gamma=2,alpha=0.6)],
+model.compile(loss=[bcewl()],
               optimizer=Adam(lr=0.0001),
               metrics=['accuracy'])
 

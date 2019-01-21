@@ -37,7 +37,7 @@ input_height , input_width = 224 , 768
 output_height , output_width = 224 , 768
 
 shap=img.shape
-img=cv2.resize(img,(input_width,input_height))
+img=cv2.resize(img,(input_width,input_height))/255.0
 im1=img
 VGG_Weights_path = "vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5"
 
@@ -129,7 +129,7 @@ model = FCN8(nClasses     = n_classes,
              input_width  = input_width)
 
 print(model.summary())
-model.load_weights('modelFCN8_bhoomi_multi-2019-01-19 03:33:02.607612.h5')
+model.load_weights('modelFCN8_bhoomi_multi_jaccard.h5')
 
 
 img=np.expand_dims(img,axis=0)
@@ -139,17 +139,19 @@ print(output.shape)
 
 output=output[0]
 print(output.shape)	
-output=output[:,:,0]
+output=output[:,:,2]
+print(np.max(output))
 output=np.reshape(output,(input_height,input_width,1))
-output[output>=0.5]=1
-output[output<0.5]=0
+
+output[output>=0.99]=1
+output[output<0.99]=0
 print(output.shape)
 output=255*output
 print(output)
 print(output.shape)
 print(np.unique(output))
 
-cv2.imwrite('out3_multi.png',output)
+cv2.imwrite('penn3_2.png',output)
 
 def give_color_to_seg_img(im,seg,n_classes):
     '''
@@ -170,5 +172,5 @@ def give_color_to_seg_img(im,seg,n_classes):
     return(seg_img)
 
 
-colout=give_color_to_seg_img(im1,output,9)
+colout=give_color_to_seg_img(im1*255,output,9)
 cv2.imwrite('out_col.png',colout)
